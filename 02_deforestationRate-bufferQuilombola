@@ -1,0 +1,123 @@
+/**
+ * @name
+ *    MODELAGEM DA COBERTURA E USO DA TERRA DE TERRITÓRIOS QUILOMBOLAS
+ *    Instituto Socioambiental (ISA)
+ *  
+ * @author
+ *    Bárbara Costa da Silva 
+ *    barbaracosta2@yahoo.com.br
+ * 
+ * @descprition
+ *    Este script calcula a taxa de desmatamento em territórios quilombolas e seu entorno (INCRA),
+ *    utilizando dados do MapBiomas (Coleção 9).
+ *
+**/
+
+// --- --- --- 02_deforestationRate
+
+// --- DATASETS DE ENTRADA (Territórios Quilombolas, Buffer de 10 km e Biomas)
+var quilombolas = ee.FeatureCollection("projects/ee-babecsilva-consultorias/assets/ISA/INCRA_territorios-quilombolas_maior1ha");
+var quilombolas_buffer = ee.FeatureCollection("projects/ee-babecsilva-consultorias/assets/ISA/territorios-quilombolas_buffer10km_sem-areas-protegidas");
+
+// --- --- --- COBERTURA E USO DA TERRA (MAPBIOMAS, COLEÇÃO 9)
+var landcover = ee.Image('projects/mapbiomas-public/assets/brazil/lulc/collection9/mapbiomas_collection90_integration_v1');
+
+// Reclassificação de classes de uso e cobertura da terra [1 - veg. nativa, 3 - antrópico, 4 - área não vegetada, 5 - água]
+var old_values = [3, 4, 5, 6, 49, 11, 12, 32, 29, 50, 15, 19, 39, 20, 40, 62, 41, 36, 46, 47, 35, 48, 9, 21, 23, 24, 30, 25, 33, 31];
+var new_values = [1, 1, 1, 1,  1,  1,  1,  1,  1,  1,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 3,  3,  4,  4,  4,  4,  5,  5];
+
+old_values.forEach(function(value, i) {
+  landcover = landcover.where(landcover.eq(value), new_values[i]);
+});
+
+print('landcover', landcover);
+Map.addLayer(landcover, {bands: ['classification_2023'], min: 1, max: 5, palette: ['1f8d49', 'd6bc74', 'ffefc3', 'd4271e', '2532e4']}, 'landcover 2023');
+
+// --- --- --- FUNÇÃO PARA CÁLCULO DE ÁREA
+function calculateArea(image, region, year) {
+  // Calcular a área em hectares
+  var areaHa = ee.Image.pixelArea().divide(10000); 
+  
+  // Selecionar a banda correspondente ao ano fornecido
+  var imageYear = image.select('classification_' + year);
+  
+  // Filtrar pixels da classe desejada (1, vegetação nativa)
+  var areaClass = imageYear.eq(1).multiply(areaHa);
+  
+  // Somar os valores de área dentro do território
+  var areaStats = areaClass.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: region,
+    scale: 30,
+    maxPixels: 1e13
+  });
+  
+  // Retornar o valor da área
+  return ee.Number(areaStats.get('classification_' + year));  
+}
+
+// --- --- --- FUNÇÃO PARA CÁLCULO DA TAXA DE DESMATAMENTO (ano n+1 - ano n/ ano n)
+// Lista de anos para análise
+  var years = [
+    '1985','1986','1987','1988','1989','1990',
+    '1991','1992','1993','1994','1995','1996',
+    '1997','1998','1999','2000','2001','2002',
+    '2003','2004','2005','2006','2007','2008',
+    '2009','2010','2011','2012','2013','2014',
+    '2015','2016','2017','2018','2019','2020',
+    '2021','2022','2023'
+  ];
+  
+// Iterar sobre os anos para calcular taxas anuais
+  years.slice(0, -1).forEach(function(year_n, i) {
+    var year_np1 = years[i + 1];
+      
+      // Calcular as áreas de vegetação nativa nos anos n e n+1
+       var yearlyDeforestation = quilombolas_buffer.map(function(feature) {
+       var area_n = calculateArea(landcover, feature.geometry(), year_n);
+       var area_np1 = calculateArea(landcover, feature.geometry(), year_np1);
+    
+      // Calcular a taxa de desmatamento em porcentagem
+      var deforestationRate = area_np1.subtract(area_n).divide(area_n).multiply(100);
+          deforestationRate = deforestationRate.format('%.2f');
+      
+      // Criar uma feature para armazenar os dados da taxa
+      return ee.Feature(feature.geometry(), {
+        'year': year_np1,  
+        'deforestation_rate': deforestationRate,  
+        'cd_quilomb':feature.get('cd_quilomb'),
+        // 'cd_sipra':feature.get('cd_sipra'),
+        // 'cd_sr':feature.get('cd_sr'),
+        'cd_uf':feature.get('cd_uf'),
+        // 'dt_decreto':feature.get('dt_decreto'),
+        // 'dt_public1':feature.get('dt_public1'),
+        // 'dt_publica':feature.get('dt_publica'),
+        // 'dt_titulac':feature.get('dt_titulac'),
+        'esfera':feature.get('esfera'),
+        // 'fase':feature.get('fase'),
+        'nm_comunid':feature.get('nm_comunid'),
+        'nm_municip':feature.get('nm_municip'),
+        'quilombo_area_ha':feature.get('area_ha'),
+        // 'nr_escalao':feature.get('nr_escalao'),
+        'nr_familia':feature.get('nr_familia'),
+        // 'nr_perimet':feature.get('nr_perimet'),
+        'nr_process':feature.get('nr_process'),
+        // 'ob_descric':feature.get('ob_descric'),
+        // 'responsave':feature.get('responsave'),
+        // 'st_titulad':feature.get('st_titulad'),
+        // 'tp_levanta':feature.get('tp_levanta'),
+        'tocam_UC':feature.get('tocam_UC'),
+        'tocam_TI':feature.get('tocam_TI')
+        
+      });
+
+    });
+    
+// --- --- --- Exportação dos dados para o Google Drive tabela separada por ano
+  Export.table.toDrive({
+    collection: yearlyDeforestation,
+    description: 'TXDESMATAMENTO_buffer10km_sem-areas-protegidas_' + year_np1,
+    folder: '0. TXDesmatamento_Buffer',
+    fileFormat: 'CSV'
+  });
+});
