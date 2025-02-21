@@ -4,7 +4,7 @@
  *    Instituto Socioambiental (ISA)
  *  
  * @author
- *    Bárbara Costa
+ *    Bárbara Costa da Silva 
  *    barbaracosta2@yahoo.com.br
  *
 **/
@@ -316,7 +316,6 @@ var nivels = {
               // 'classe_int':classe_int,
               'bioma_int':classe_territory,
               'bioma':nivels.biomas.get(classe_territory),
-              
               'cd_quilomb':a.get('cd_quilomb'),
               // 'cd_sipra':a.get('cd_sipra'),
               // 'cd_sr':a.get('cd_sr'),
@@ -338,6 +337,7 @@ var nivels = {
               // 'responsave':a.get('responsave'),
               // 'st_titulad':a.get('st_titulad'),
               // 'tp_levanta':a.get('tp_levanta'),
+              'buffer_ha': a.get('buffer_ha')
             });
         }));
       })
@@ -364,6 +364,7 @@ var nivels = {
       'nr_familia',
       'nr_process',
       'esfera',
+      'buffer_ha'
 
       ],
   });
