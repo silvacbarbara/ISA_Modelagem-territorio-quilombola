@@ -13,7 +13,7 @@
  *
 **/
 
-// --- --- --- 01_LULC-area-calculate
+// --- --- --- 01_LULC-calculateArea
 
 // --- DATASETS DE ENTRADA (Territórios Quilombolas, Buffer de 10 km e Biomas)
 var quilombolas = ee.FeatureCollection("projects/ee-babecsilva-consultorias/assets/ISA/INCRA_territorios-quilombolas_maior1ha");
