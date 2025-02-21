@@ -69,7 +69,8 @@ function calcularImagemRotacao(landcover) {
   
   // Calcular a rotação: anos antropizados / número de alternâncias
   var rotacao = anosAntropizados.divide(imagemTransicoes)
-    .rename('rotacao');
+    .rename('rotacao')
+    .multiply(100).round().divide(100); // Mantem o valor do pixel com 2 casas decimais
     //.updateMask(alternancias.gt(0));
 
   return rotacao;
@@ -165,7 +166,8 @@ function calcularImagemIntensidadeManejo(landcover) {
     // Calcular índice de intensidade de manejo
     var intensidadeManejo = mediaAnosAntropizados
         .divide(anosDesdePrimeiraAntropizacao.max(1)) // Evita divisão por zero
-        .rename('intensidade_manejo');
+        .rename('intensidade_manejo')
+        .multiply(100).round().divide(100); // Mantem o valor do pixel com 2 casas decimais
 
     return intensidadeManejo;
 }
