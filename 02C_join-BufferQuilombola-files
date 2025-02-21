@@ -1,0 +1,35 @@
+# Importar as bibliotecas e conceder acesso ao Google Drive
+import pandas as pd
+import glob
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Caminho onde os arquivos CSV foram salvos
+caminho_arquivos = '/content/drive/MyDrive/2. Resultados das tabelas/TXDESMATAMENTO_*.csv'
+
+# Lista todos os arquivos CSV no diretório
+arquivos = glob.glob(caminho_arquivos)
+
+# Imprimir a lista de arquivos encontrados
+print("Arquivos encontrados:", arquivos)
+
+# Lista para armazenar os DataFrames
+dfs = []
+
+# Iterar sobre cada arquivo e carregar como DataFrame
+for arquivo in arquivos:
+    df = pd.read_csv(arquivo)
+
+    # Remover colunas indesejadas
+    df = df.drop(columns=["system:index", ".geo"], errors="ignore")
+
+    # Adicionar à lista
+    dfs.append(df)
+
+# Concatenar todos os DataFrames em um único
+df_final = pd.concat(dfs, ignore_index=True)
+
+# Salvar o arquivo combinado
+df_final.to_csv('/content/drive/MyDrive/2. Resultados das tabelas/TXDESMATAMENTO_buffer10km_sem-areas-protegidas.csv', index=False)
+
+print("Arquivo final salvo com sucesso!")
