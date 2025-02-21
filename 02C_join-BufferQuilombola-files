@@ -1,3 +1,16 @@
+##
+ # @name
+ #    MODELAGEM DA COBERTURA E USO DA TERRA DE TERRITÓRIOS QUILOMBOLAS
+ #    Instituto Socioambiental (ISA)
+ #  
+ # @author
+ #    Bárbara Costa da Silva 
+ #    barbaracosta2@yahoo.com.br
+ #
+##/
+
+##  --- --- --- 02C_join-BufferQuilombola-files
+
 # Importar as bibliotecas e conceder acesso ao Google Drive
 import pandas as pd
 import glob
