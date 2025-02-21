@@ -1,0 +1,381 @@
+/**
+ * @name
+ *    MODELAGEM DA COBERTURA E USO DA TERRA DE TERRITÓRIOS QUILOMBOLAS
+ *    Instituto Socioambiental (ISA)
+ *  
+ * @author
+ *    Bárbara Costa da Silva 
+ *    barbaracosta2@yahoo.com.br
+ *
+**/
+
+// --- --- --- 03_getPrimaryIndexes
+
+// DATASETS (Territórios Quilombolas e Buffer 10km)
+var quilombolas = ee.FeatureCollection("projects/ee-babecsilva-consultorias/assets/ISA/INCRA_territorios-quilombolas_maior1ha");
+var quilombolas_buffer = ee.FeatureCollection("projects/ee-babecsilva-consultorias/assets/ISA/territorios-quilombolas_buffer10km_sem-areas-protegidas");
+
+// --- --- --- COBERTURA E USO DA TERRA (MAPBIOMAS, COLEÇÃO 9)
+var landcover = ee.Image('projects/mapbiomas-public/assets/brazil/lulc/collection9/mapbiomas_collection90_integration_v1');
+
+// Reclassificação
+var old_values = [3, 4, 5, 6, 49, 11, 12, 32, 29, 50, 15, 19, 39, 20, 40, 62, 41, 36, 46, 47, 35, 48, 9, 21, 23, 24, 30, 25, 33, 31];
+var new_values = [1, 1, 1, 1,  1,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 3,  3,  4,  4,  4,  4,  5,  5];
+
+old_values.forEach(function(value, i){
+  landcover = landcover.where(landcover.eq(value), new_values[i]);
+});
+
+print('landcover',landcover);
+Map.addLayer(landcover, {bands:['classification_2023'], min:1, max:5, palette: ['1f8d49', 'd6bc74', 'ffefc3', 'd4271e', '2532e4']},'Cob. Uso da Terra - 2023');
+
+
+// --- --- --- FUNÇÕES PARA CÁLCULO DOS ÍNDICES
+// (i) Área Preservada - Sem transições
+function calcularImagemPreservada(landcover) {
+  var vegetacaoNativa = landcover.eq(1).or(landcover.eq(2));
+  var preservada = vegetacaoNativa.reduce(ee.Reducer.allNonZero());
+  return preservada.rename('preservada');
+}
+
+// (ii) Área em Rotação - Alternâncias entre nativa (1, 2) e antropizada (3, 4)
+function calcularImagemRotacao(landcover) {
+      // Criar uma máscara para identificar os anos antropizados (classes 3 ou 4)
+    var mascaraAntropizada = landcover.eq(3).or(landcover.eq(4));
+    // Map.addLayer(mascaraAntropizada, {}, 'Máscara Antropizada');
+
+    // Somar o número total de anos antropizados por pixel
+    var anosAntropizados = mascaraAntropizada.reduce(ee.Reducer.sum()).rename('anos_antropizados');
+    // Map.addLayer(anosAntropizados, {}, 'Anos Antropizados');
+
+    // Lista de anos da série temporal
+    var anos = ee.List(landcover.bandNames().map(function(banda) {
+        return ee.Number.parse(ee.String(banda).split('_').get(1)); // Extrai o ano da banda
+    }));
+
+    // Criar lista de imagens deslocadas para comparar transições
+    var transicoes = ee.List.sequence(1, landcover.bandNames().length().subtract(1)).map(function(i) {
+        var anoAtual = mascaraAntropizada.select([ee.Number(i).int()]);
+        var anoAnterior = mascaraAntropizada.select([ee.Number(i).subtract(1).int()]);
+        return anoAtual.subtract(anoAnterior).eq(1).rename('transicao'); 
+    });
+
+    // Criar uma única imagem somando todas as transições detectadas
+    var imagemTransicoes = ee.ImageCollection(transicoes)
+        .sum()
+        .rename('vezes_antropizado');
+
+  // Map.addLayer(imagemTransicoes, {}, 'Vezes Antropizado');
+  
+  // Calcular a rotação: anos antropizados / número de alternâncias
+  var rotacao = anosAntropizados.divide(imagemTransicoes)
+    .rename('rotacao');
+    //.updateMask(alternancias.gt(0));
+
+  return rotacao;
+}
+
+// (iii) Área em Regeneração - Recrescimento de vegetação nativa em área antrópica
+function calcularImagemRegeneracao(landcover) {
+  // Identificar todas as bandas de classificação
+  var bandNames = landcover.bandNames();
+  
+  // Classificar bandas em dois grupos: Nativa (1 e 2) e Antropizada (3 e 4)
+  var categorias = landcover.gte(3).rename(bandNames); // 1 para antropizada, 0 para nativa
+  
+  // Identificar pixels que foram antropizados em algum momento da série (Classes 3 ou 4)
+  var antropizadoEmAlgumMomento = landcover
+    .gte(3) // Máscara para classes antropizadas (3 e 4)
+    .reduce(ee.Reducer.anyNonZero()); // True se houve qualquer valor antropizado
+    
+  // Identificar pixels que estão como vegetação nativa em 2023
+  var nativaEm2023 = landcover.select('classification_2023').lte(2);
+  
+  // Área em regeneração: Nativa em 2023 e antropizada em algum momento
+  var regeneracao = nativaEm2023
+    .and(antropizadoEmAlgumMomento)
+    .rename('regeneracao');
+
+  // Contar o número de alternâncias entre nativa e antropizada
+  var alternancias = categorias
+    .select(bandNames.slice(1)) // Bandas de 1986 em diante
+    .neq(categorias.select(bandNames.slice(0, -1)))
+    .reduce(ee.Reducer.sum())
+    .rename('alternancias');
+  
+  // Identificar pixels que tiveram duas ou mais transições (coivara)
+  var coivara = alternancias.gte(2).rename('coivara');
+  
+  return {
+    regeneracao: regeneracao,
+    coivara: coivara
+  };
+}
+
+// (iv) Intensidade de Manejo
+function calcularImagemIntensidadeManejo(landcover) {
+    // Criar uma máscara para identificar os anos antropizados (classes 3 ou 4)
+    var mascaraAntropizada = landcover.eq(3).or(landcover.eq(4));
+    // Map.addLayer(mascaraAntropizada, {}, 'Máscara Antropizada');
+
+    // Somar o número total de anos antropizados por pixel
+    var anosAntropizados = mascaraAntropizada.reduce(ee.Reducer.sum()).rename('anos_antropizados');
+    // Map.addLayer(anosAntropizados, {}, 'Anos Antropizados');
+
+    // Lista de anos da série temporal
+    var anos = ee.List(landcover.bandNames().map(function(banda) {
+        return ee.Number.parse(ee.String(banda).split('_').get(1)); // Extrai o ano da banda
+    }));
+
+    // Criar lista de imagens deslocadas para comparar transições
+    var transicoes = ee.List.sequence(1, landcover.bandNames().length().subtract(1)).map(function(i) {
+        var anoAtual = mascaraAntropizada.select([ee.Number(i).int()]);
+        var anoAnterior = mascaraAntropizada.select([ee.Number(i).subtract(1).int()]);
+        return anoAtual.subtract(anoAnterior).eq(1).rename('transicao'); 
+    });
+
+    // Criar uma única imagem somando todas as transições detectadas
+    var imagemTransicoes = ee.ImageCollection(transicoes)
+        .sum()
+        .rename('vezes_antropizado');
+
+    // Map.addLayer(imagemTransicoes, {}, 'Vezes Antropizado');
+
+    // Identificar o ano da primeira antropização
+    var primeiroAnoAntropizado = mascaraAntropizada.selfMask()
+        .multiply(ee.Image.constant(anos)) // Multiplica cada pixel pelo ano correspondente
+        .reduce(ee.Reducer.min()) // Pega o menor ano (primeira antropização)
+        .rename('primeiro_ano_antropizado');
+
+    // Map.addLayer(primeiroAnoAntropizado, {}, 'Primeiro Ano Antropizado');
+
+    // Definir o ano final da série temporal
+    var anoFinal = ee.Number(anos.get(anos.length().subtract(1))); // Último ano da série
+
+    // Calcular os anos desde a primeira antropização
+    var anosDesdePrimeiraAntropizacao = primeiroAnoAntropizado
+        .subtract(1985)
+        .rename('anos_desde_primeira_antropizacao');
+
+    // Calcular a média de anos antropizados por ciclo
+    var mediaAnosAntropizados = anosAntropizados
+        .divide(imagemTransicoes.max(1)) // Evita divisão por zero
+        .rename('media_anos_antropizados');
+
+    // Calcular índice de intensidade de manejo
+    var intensidadeManejo = mediaAnosAntropizados
+        .divide(anosDesdePrimeiraAntropizacao.max(1)) // Evita divisão por zero
+        .rename('intensidade_manejo');
+
+    return intensidadeManejo;
+}
+
+// Gerar as imagens dos índices
+var imgPreservada = calcularImagemPreservada(landcover);
+var imgRotacao = calcularImagemRotacao(landcover);
+var imagensRegeneracao = calcularImagemRegeneracao(landcover);
+var imgRegeneracao = imagensRegeneracao.regeneracao;
+var imgCoivara = imagensRegeneracao.coivara;
+var imgIntensidadeManejo = calcularImagemIntensidadeManejo(landcover);
+
+// Visualizar no mapa
+Map.addLayer(imgPreservada, {min: 0, max: 1, palette: ["f4f1bb","a8c256"]}, 'Área Preservada');
+Map.addLayer(imgRotacao, {min: 1, max: 38, palette: ["f2f2f2","54478c","2c699a","048ba8","0db39e","16db93","83e377","b9e769","efea5a","f1c453","f29e4c"]}, 'Área em Rotação');
+Map.addLayer(imgRegeneracao, {min: 0, max: 1, palette: ["fff1f1", "007e2c"]}, 'Área em Regeneração');
+Map.addLayer(imgCoivara, {min: 0, max: 1, palette: ["dad7cd", "606c38"]}, 'Área em Coivara');
+Map.addLayer(imgIntensidadeManejo, {min: 0, max: 39, palette: ["00a6a6","5ec2cb","bbdef0","efca08","f49f0a","f08700"]}, 'Intensidade de Manejo');
+
+
+// --- --- Cálculo de área em hectares (ha)
+// Definição da layer de biomas
+var area_ha = ee.Image.pixelArea().divide(10000);
+var scale = 30;
+var biomas = ee.FeatureCollection("projects/ee-babecsilva-consultorias/assets/ISA/ibge_biomas_250mil");
+var img_biomas = ee.Image().paint(biomas,'CD_Bioma');
+var nivels = {
+  biomas: ee.Dictionary({
+      0:'Não Observado',
+      1:'Amazônia',
+      2:'Caatinga',
+      3:'Cerrado',
+      4:'Mata Atlântica',
+      5:'Pampa',
+      6:'Pantanal',
+  })
+};
+
+[
+  [imgPreservada,'Preservada'],
+  [imgRotacao,'Rotacao'],
+  [imgRegeneracao,'Regeneracao'],
+  [imgCoivara,'Coivara'],
+  [imgIntensidadeManejo,'IntensidadeManejo']
+].forEach(function(list){
+
+  var indice_image = list[0].multiply(10000).int(); 
+  var str = list[1];
+  
+  print('---' + str);
+  print('indice_image',indice_image);
+
+  // --- Processamento para os territórios quilombolas
+  var table = ee.FeatureCollection(area_ha
+      .addBands(indice_image.multiply(10).add(img_biomas))
+      .reduceRegions({
+        collection:quilombolas,
+        reducer:ee.Reducer.sum().group(1,'classe'),
+        scale:scale,
+      }).map(function(a){
+        return ee.FeatureCollection(ee.List(a.get('groups')).map(function(obj){
+          obj = ee.Dictionary(obj);
+          
+          var classe_int = obj.getNumber('classe').divide(10).int().float().divide(10000);
+          var classe_territory = obj.getNumber('classe').mod(10).int();
+          
+          return ee.Feature(null)
+            .set(str,classe_int)
+            .set({
+              'area_ha':obj.get('sum'),
+              // 'classe_int':classe_int,
+              'bioma_int':classe_territory,
+              'bioma':nivels.biomas.get(classe_territory),
+              
+              'cd_quilomb':a.get('cd_quilomb'),
+              // 'cd_sipra':a.get('cd_sipra'),
+              // 'cd_sr':a.get('cd_sr'),
+              'cd_uf':a.get('cd_uf'),
+              // 'dt_decreto':a.get('dt_decreto'),
+              // 'dt_public1':a.get('dt_public1'),
+              // 'dt_publica':a.get('dt_publica'),
+              // 'dt_titulac':a.get('dt_titulac'),
+              'esfera':a.get('esfera'),
+              // 'fase':a.get('fase'),
+              'nm_comunid':a.get('nm_comunid'),
+              'nm_municip':a.get('nm_municip'),
+              'quilombo_area_ha':a.get('area_ha'),
+              // 'nr_escalao':a.get('nr_escalao'),
+              'nr_familia':a.get('nr_familia'),
+              // 'nr_perimet':a.get('nr_perimet'),
+              'nr_process':a.get('nr_process'),
+              // 'ob_descric':a.get('ob_descric'),
+              // 'responsave':a.get('responsave'),
+              // 'st_titulad':a.get('st_titulad'),
+              // 'tp_levanta':a.get('tp_levanta'),
+              'tocam_UC':a.get('tocam_UC'),
+              'tocam_TI':a.get('tocam_TI')
+            });
+        }));
+      })
+    ).flatten();
+
+  print('área interna',table.limit(10));
+  
+  // Exportação da tabela
+  Export.table.toDrive({
+    collection:table,
+    description:'INDICE_'+str+'_territorios-quilombolas',
+    folder:'2. Resultados das tabelas',
+    fileNamePrefix:'INDICE_'+str+'_territorios-quilombolas',
+    fileFormat:'csv',
+    selectors:[
+      'area_ha',
+      'bioma',
+      'cd_uf',
+      str,
+      'nm_municip',
+      'cd_quilomb',
+      'nm_comunid',
+      'quilombo_area_ha',
+      'nr_familia',
+      'nr_process',
+      'esfera',
+      'tocam_UC',
+      'tocam_TI'
+      
+      ],
+  });
+  
+  // --- Processamento para os buffers de 10 km dos territórios quilombolas
+  var table_buffer = ee.FeatureCollection(area_ha
+      .addBands(indice_image.multiply(10).add(img_biomas))
+      .reduceRegions({
+        collection:quilombolas_buffer,
+        reducer:ee.Reducer.sum().group(1,'classe'),
+        scale:scale,
+      }).map(function(a){
+        return ee.FeatureCollection(ee.List(a.get('groups')).map(function(obj){
+          obj = ee.Dictionary(obj);
+          
+          var classe_int = obj.getNumber('classe').divide(10).int().float().divide(10000);
+          var classe_territory = obj.getNumber('classe').mod(10).int();
+          
+          return ee.Feature(null)
+            .set(str,classe_int)
+            .set({
+              'area_ha':obj.get('sum'),
+              // 'classe_int':classe_int,
+              'bioma_int':classe_territory,
+              'bioma':nivels.biomas.get(classe_territory),
+              
+              'cd_quilomb':a.get('cd_quilomb'),
+              // 'cd_sipra':a.get('cd_sipra'),
+              // 'cd_sr':a.get('cd_sr'),
+              'cd_uf':a.get('cd_uf'),
+              // 'dt_decreto':a.get('dt_decreto'),
+              // 'dt_public1':a.get('dt_public1'),
+              // 'dt_publica':a.get('dt_publica'),
+              // 'dt_titulac':a.get('dt_titulac'),
+              'esfera':a.get('esfera'),
+              // 'fase':a.get('fase'),
+              'nm_comunid':a.get('nm_comunid'),
+              'nm_municip':a.get('nm_municip'),
+              'nr_area_ha':a.get('nr_area_ha'),
+              // 'nr_escalao':a.get('nr_escalao'),
+              'nr_familia':a.get('nr_familia'),
+              // 'nr_perimet':a.get('nr_perimet'),
+              'nr_process':a.get('nr_process'),
+              // 'ob_descric':a.get('ob_descric'),
+              // 'responsave':a.get('responsave'),
+              // 'st_titulad':a.get('st_titulad'),
+              // 'tp_levanta':a.get('tp_levanta'),
+            });
+        }));
+      })
+    ).flatten();
+  print('area buffer', table_buffer.limit(10));
+  
+  // Exportação da tabela
+  Export.table.toDrive({
+    collection:table_buffer,
+    description:'INDICE_'+str+'_buffer10km_sem-areas-protegidas',
+    folder:'2. Resultados das tabelas',
+    fileNamePrefix:'INDICE_'+str+'_buffer10km_sem-areas-protegidas',
+    fileFormat:'csv',
+    selectors:[
+      'area_ha',
+      // 'classe_int',
+      'bioma',
+      'cd_uf',
+      str,
+      'nm_municip',
+      'cd_quilomb',
+      'nm_comunid',
+      'quilombo_area_ha',
+      'nr_familia',
+      'nr_process',
+      'esfera',
+
+      ],
+  });
+    
+});
+
+// --- Adiciona ao mapa os territórios quilombolas e buffer
+
+print('quilombolas',quilombolas);
+Map.addLayer(quilombolas,{color:'red'},'quilombolas');
+
+print('quilombolas_buffer',quilombolas_buffer);
+var empty = ee.Image().byte();
+var studyArea = empty.paint(quilombolas_buffer,1,2);
+Map.addLayer(studyArea, {palette: '000000'}, 'quilombolas_buffer');
