@@ -1,0 +1,192 @@
+##
+ # name
+ #    MODELAGEM DA COBERTURA E USO DA TERRA DE TERRITÓRIOS QUILOMBOLAS
+ #    Instituto Socioambiental (ISA)
+ #  
+ # author
+ #    Bárbara Costa
+ #    barbaracosta2@yahoo.com.br
+ #
+##/
+
+##  --- --- --- 04_getSecondaryIndexes
+
+# Montar o Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
+
+#Importar bibliotecas
+import pandas as pd
+
+# =============================================================================
+# Função para índices binários (preservação, coivara e regeneração)
+# Filtra registros com valor 1 e soma a área (area_ha)
+# Retorna: nm_comunid, valor do território, valor do entorno e a razão
+# =============================================================================
+def process_index_binary(index_name, col_name, file_ter, file_buf):
+    # Ler os dados
+    df_ter = pd.read_csv(file_ter)
+    df_buf = pd.read_csv(file_buf)
+    
+    # Filtrar somente onde o índice vale 1
+    df_ter = df_ter[df_ter[col_name] == 1]
+    df_buf = df_buf[df_buf[col_name] == 1]
+    
+    # Agrupar por nm_comunid e somar a área
+    ter_sum = df_ter.groupby("nm_comunid")["area_ha"].sum().reset_index()
+    ter_sum.rename(columns={"area_ha": f"{col_name}_ter"}, inplace=True)
+    
+    buf_sum = df_buf.groupby("nm_comunid")["area_ha"].sum().reset_index()
+    buf_sum.rename(columns={"area_ha": f"{col_name}_buf"}, inplace=True)
+    
+    # Merge para unir os dados (outer para incluir territórios que apareçam em apenas um dos arquivos)
+    df_merge = pd.merge(ter_sum, buf_sum, on="nm_comunid", how="outer")
+    
+    # Calcular a razão: valor do território / valor do entorno
+    df_merge[f"razao_{index_name}"] = df_merge[f"{col_name}_ter"] / df_merge[f"{col_name}_buf"]
+    
+    return df_merge
+
+# =============================================================================
+# Função para índices contínuos (rotação)
+# Calcula a média simples dos valores para cada território e entorno
+# Retorna: nm_comunid, valor do território, valor do entorno e a razão
+# =============================================================================
+def process_index_continuous(index_name, col_name, file_ter, file_buf):
+    df_ter = pd.read_csv(file_ter)
+    df_buf = pd.read_csv(file_buf)
+    
+    # Agrupar por nm_comunid e calcular a média simples
+    ter_val = df_ter.groupby("nm_comunid")[col_name].mean().reset_index()
+    ter_val.rename(columns={col_name: f"{col_name}_ter"}, inplace=True)
+    
+    buf_val = df_buf.groupby("nm_comunid")[col_name].mean().reset_index()
+    buf_val.rename(columns={col_name: f"{col_name}_buf"}, inplace=True)
+    
+    df_merge = pd.merge(ter_val, buf_val, on="nm_comunid", how="outer")
+    df_merge[f"razao_{index_name}"] = df_merge[f"{col_name}_ter"] / df_merge[f"{col_name}_buf"]
+    
+    return df_merge
+
+# =============================================================================
+# Função para o índice de intensidade
+# Para intensidade:
+#   - Numerador: média simples dos valores (em anos) do território, do arquivo de intensidade.
+#   - Denominador: valor do entorno obtido a partir da regeneração (dados binários, soma da área_ha onde regeneracao==1).
+#
+# Além disso, também retorna a média de intensidade do buffer (se houver).
+# =============================================================================
+def process_intensity(file_int_ter, file_int_buf, file_regen_buf):
+    # Intensidade do território: arquivo de intensidade (território)
+    df_int_ter = pd.read_csv(file_int_ter)
+    int_ter = df_int_ter.groupby("nm_comunid")["IntensidadeManejo"].mean().reset_index()
+    int_ter.rename(columns={"IntensidadeManejo": "intensidade_ter"}, inplace=True)
+    
+    # Intensidade do buffer: arquivo de intensidade (buffer)
+    df_int_buf = pd.read_csv(file_int_buf)
+    int_buf = df_int_buf.groupby("nm_comunid")["IntensidadeManejo"].mean().reset_index()
+    int_buf.rename(columns={"IntensidadeManejo": "intensidade_buf"}, inplace=True)
+    
+    # Para regeneração do entorno: usar o arquivo de regeneração (buffer), filtrando onde regeneracao==1
+    df_regen_buf = pd.read_csv(file_regen_buf)
+    df_regen_buf = df_regen_buf[df_regen_buf["Regeneracao"] == 1]
+    regen_buf = df_regen_buf.groupby("nm_comunid")["area_ha"].sum().reset_index()
+    regen_buf.rename(columns={"area_ha": "regeneracao_buf"}, inplace=True)
+    
+    # Merge dos dados de intensidade (território e buffer) e regeneração (buffer)
+    df_merge = pd.merge(int_ter, int_buf, on="nm_comunid", how="outer")
+    df_merge = pd.merge(df_merge, regen_buf, on="nm_comunid", how="outer")
+    
+    # Calcular a razão de intensidade: intensidade_ter / regeneracao_buf
+    df_merge["razao_intensidade"] = df_merge["intensidade_ter"] / df_merge["regeneracao_buf"]
+    
+    return df_merge
+
+# =============================================================================
+# Definir os caminhos dos arquivos
+# Cada índice possui um arquivo para território e outro para o entorno (buffer)
+# =============================================================================
+
+path = "/content/drive/MyDrive/Modelagem Uso e Cobertura - MapBiomas/"
+
+# Para o índice de preservação
+file_pres_ter = path + "INDICE_Preservada_territorios-quilombolas.csv"
+file_pres_buf = path + "INDICE_Preservada_buffer10km_sem-areas-protegidas.csv"
+
+# Para o índice de rotação
+file_rot_ter = path + "INDICE_Rotacao_territorios-quilombolas.csv"
+file_rot_buf = path + "INDICE_Rotacao_buffer10km_sem-areas-protegidas.csv"
+
+# Para o índice de coivara
+file_coiv_ter = path + "INDICE_Coivara_territorios-quilombolas.csv"
+file_coiv_buf = path + "INDICE_Coivara_buffer10km_sem-areas-protegidas.csv"
+
+# Para o índice de regeneração
+file_regen_ter = path + "INDICE_Regeneracao_territorios-quilombolas.csv"
+file_regen_buf = path + "INDICE_Regeneracao_buffer10km_sem-areas-protegidas.csv"
+
+# Para o índice de intensidade
+file_intmanejo_ter = path + "INDICE_IntensidadeManejo_territorios-quilombolas.csv"
+file_intmanejo_buf = path + "INDICE_IntensidadeManejo_buffer10km_sem-areas-protegidas.csv"
+
+# =============================================================================
+# Processamento de cada índice
+# -----------------------------------------------------------------------------
+# Índices binários: preservação, coivara e regeneração
+# -----------------------------------------------------------------------------
+df_pres = process_index_binary("Preservada", "Preservada", file_pres_ter, file_pres_buf)
+df_coiv = process_index_binary("Coivara", "Coivara", file_coiv_ter, file_coiv_buf)
+df_regen = process_index_binary("Regeneracao", "Regeneracao", file_regen_ter, file_regen_buf)
+
+# -----------------------------------------------------------------------------
+# Índice contínuo: rotação
+# -----------------------------------------------------------------------------
+df_rot = process_index_continuous("Rotacao", "Rotacao", file_rot_ter, file_rot_buf)
+
+# -----------------------------------------------------------------------------
+# Índice de intensidade: razão = intensidade (território) / regeneração (entorno)
+# Além de incluir os valores de intensidade de território e buffer
+# -----------------------------------------------------------------------------
+df_intensidade = process_intensity(file_intmanejo_ter, file_intmanejo_buf, file_regen_buf)
+
+# =============================================================================
+# Unir todas as razões em uma única tabela
+# =============================================================================
+df_indices = df_pres.copy()
+for df in [df_rot, df_coiv, df_regen, df_intensidade]:
+    df_indices = pd.merge(df_indices, df, on="nm_comunid", how="outer")
+
+print("Tabela final")
+print(df_indices.head())
+
+# =============================================================================
+# Importar a tabela de territórios que contém as informações extras
+# (aqui, usamos a planilha de território de preservação como base, supondo que ela contenha essas colunas)
+# =============================================================================
+df_territorio = pd.read_csv(file_pres_ter)
+colunas_info = ["nm_comunid", "bioma", "cd_uf", "nm_municip", "cd_quilomb", 
+                "quilombo_area_ha", "nr_process", "esfera", "tocam_UC", "tocam_TI"]
+
+df_info = df_territorio[colunas_info].drop_duplicates("nm_comunid")
+
+
+# =============================================================================
+# Merge final: unindo as informações extras com os índices calculados.
+# Utilizamos left join a partir dos dados dos territórios para garantir que
+# mesmo territórios sem dados no entorno sejam considerados.
+# =============================================================================
+df_final = pd.merge(df_info, df_indices, on="nm_comunid", how="left")
+
+# Opcional: reordenar as colunas para uma visualização lógica
+colunas_ordenadas = colunas_info + [col for col in df_final.columns if col not in colunas_info]
+df_final = df_final[colunas_ordenadas]
+
+
+# =============================================================================
+# Exportar a tabela final para um arquivo CSV no Google Drive
+# =============================================================================
+output_path = path + "INDICE_derivado_territorios-quilombolas-buffer-10km.csv"
+df_final.to_csv(output_path, index=False)
+
+print("Tabela final exportada para:", output_path)
+print(df_final.head())
